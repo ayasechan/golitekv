@@ -8,14 +8,14 @@ import (
 	"sync"
 )
 
-type KVStore interface {
-	Set(key, value string) error
-	Get(key string) (value string, found bool, err error)
+type KVStore[V any] interface {
+	Set(key string, value V) error
+	Get(key string) (value V, found bool, err error)
 	Delete(key string) error
 	Close() error
 }
 
-type SQLiteStore struct {
+type SQLiteStore[V any] struct {
 	db      *sql.DB
 	stmtSet *sql.Stmt
 	stmtGet *sql.Stmt
@@ -23,12 +23,12 @@ type SQLiteStore struct {
 }
 
 // _busy_timeout=5000&_journal_mode=WAL&_synchronous=NORMAL
-func NewSQLiteStore(db *sql.DB) (*SQLiteStore, error) {
+func NewSQLiteStore[V any](db *sql.DB) (*SQLiteStore[V], error) {
 	if db == nil {
 		return nil, fmt.Errorf("database connection cannot be nil")
 	}
 
-	store := &SQLiteStore{db: db}
+	store := &SQLiteStore[V]{db: db}
 
 	if err := store.initTable(); err != nil {
 		return nil, err
@@ -41,7 +41,7 @@ func NewSQLiteStore(db *sql.DB) (*SQLiteStore, error) {
 	return store, nil
 }
 
-func (s *SQLiteStore) initTable() error {
+func (s *SQLiteStore[V]) initTable() error {
 	query := `
 	CREATE TABLE IF NOT EXISTS kv_store (
 		key TEXT PRIMARY KEY,
@@ -52,7 +52,7 @@ func (s *SQLiteStore) initTable() error {
 	return err
 }
 
-func (s *SQLiteStore) prepareStatements() error {
+func (s *SQLiteStore[V]) prepareStatements() error {
 	var err error
 
 	s.stmtSet, err = s.db.Prepare(`REPLACE INTO kv_store (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP);`)
@@ -73,7 +73,7 @@ func (s *SQLiteStore) prepareStatements() error {
 	return nil
 }
 
-func (s *SQLiteStore) closeStatements() {
+func (s *SQLiteStore[V]) closeStatements() {
 	if s.stmtSet != nil {
 		s.stmtSet.Close()
 	}
@@ -85,44 +85,56 @@ func (s *SQLiteStore) closeStatements() {
 	}
 }
 
-func (s *SQLiteStore) Set(key, value string) error {
-	_, err := s.stmtSet.Exec(key, value)
+func (s *SQLiteStore[V]) Set(key string, value V) error {
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("failed to marshal value: %w", err)
+	}
+
+	_, err = s.stmtSet.Exec(key, string(bytes))
 	return err
 }
 
-func (s *SQLiteStore) Get(key string) (string, bool, error) {
-	var value string
-	err := s.stmtGet.QueryRow(key).Scan(&value)
+func (s *SQLiteStore[V]) Get(key string) (V, bool, error) {
+	var zero V
+	var valStr string
 
+	err := s.stmtGet.QueryRow(key).Scan(&valStr)
 	if err == sql.ErrNoRows {
-		return "", false, nil
+		return zero, false, nil
 	}
 	if err != nil {
-		return "", false, err
+		return zero, false, err
 	}
+
+	var value V
+	if err := json.Unmarshal([]byte(valStr), &value); err != nil {
+		return zero, false, fmt.Errorf("failed to unmarshal value: %w", err)
+	}
+
 	return value, true, nil
 }
 
-func (s *SQLiteStore) Delete(key string) error {
+func (s *SQLiteStore[V]) Delete(key string) error {
 	_, err := s.stmtDel.Exec(key)
 	return err
 }
 
-func (s *SQLiteStore) Close() error {
+func (s *SQLiteStore[V]) Close() error {
 	s.closeStatements()
 	return nil
 }
 
-type JSONStore struct {
+type JSONStore[V any] struct {
 	mu       sync.RWMutex
 	filePath string
-	data     map[string]string
+	data     map[string]V
 }
 
-func NewJSONStore(filePath string) (*JSONStore, error) {
-	store := &JSONStore{
+func NewJSONStore[V any](filePath string) (*JSONStore[V], error) {
+	store := &JSONStore[V]{
 		filePath: filePath,
-		data:     make(map[string]string),
+		data:     make(map[string]V),
 	}
 
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
@@ -133,11 +145,12 @@ func NewJSONStore(filePath string) (*JSONStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer fd.Close()
 
 	return store, json.NewDecoder(fd).Decode(&store.data)
 }
 
-func (j *JSONStore) saveToDisk() error {
+func (j *JSONStore[V]) saveToDisk() error {
 	fileData, err := json.MarshalIndent(j.data, "", "  ")
 	if err != nil {
 		return err
@@ -145,21 +158,21 @@ func (j *JSONStore) saveToDisk() error {
 	return os.WriteFile(j.filePath, fileData, 0644)
 }
 
-func (j *JSONStore) Get(key string) (string, bool, error) {
+func (j *JSONStore[V]) Get(key string) (V, bool, error) {
 	j.mu.RLock()
 	defer j.mu.RUnlock()
 	val, found := j.data[key]
 	return val, found, nil
 }
 
-func (j *JSONStore) Set(key, value string) error {
+func (j *JSONStore[V]) Set(key string, value V) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.data[key] = value
 	return j.saveToDisk()
 }
 
-func (j *JSONStore) Delete(key string) error {
+func (j *JSONStore[V]) Delete(key string) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if _, found := j.data[key]; !found {
@@ -169,6 +182,6 @@ func (j *JSONStore) Delete(key string) error {
 	return j.saveToDisk()
 }
 
-func (j *JSONStore) Close() error {
+func (j *JSONStore[V]) Close() error {
 	return nil
 }

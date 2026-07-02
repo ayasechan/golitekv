@@ -10,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func testStoreInterface(t *testing.T, store KVStore) {
+func testStoreInterface(t *testing.T, store KVStore[string]) {
 	// 1. 测试 Get 一个不存在的 Key
 	val, found, err := store.Get("non-existent")
 	if err != nil {
@@ -72,7 +72,7 @@ func testStoreInterface(t *testing.T, store KVStore) {
 // 测试 SQLiteStore 实现
 func TestSQLiteStore(t *testing.T) {
 	// 异常边界测试：传入 nil db
-	_, err := NewSQLiteStore(nil)
+	_, err := NewSQLiteStore[any](nil)
 	if err == nil {
 		t.Error("expected error when passing nil db to NewSQLiteStore, got nil")
 	}
@@ -85,7 +85,7 @@ func TestSQLiteStore(t *testing.T) {
 	}
 	defer db.Close()
 
-	store, err := NewSQLiteStore(db)
+	store, err := NewSQLiteStore[string](db)
 	if err != nil {
 		t.Fatalf("failed to create SQLiteStore: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestJSONStore(t *testing.T) {
 	tmpDir := t.TempDir()
 	jsonPath := filepath.Join(tmpDir, "test_store.json")
 
-	store, err := NewJSONStore(jsonPath)
+	store, err := NewJSONStore[string](jsonPath)
 	if err != nil {
 		t.Fatalf("failed to create JSONStore: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestJSONStore(t *testing.T) {
 	store.Close()
 
 	// 验证持久化行为
-	store2, err := NewJSONStore(jsonPath)
+	store2, err := NewJSONStore[string](jsonPath)
 	if err != nil {
 		t.Fatalf("failed to re-open JSONStore: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestJSONStore(t *testing.T) {
 	}
 	store2.Close()
 
-	store3, err := NewJSONStore(jsonPath)
+	store3, err := NewJSONStore[string](jsonPath)
 	if err != nil {
 		t.Fatalf("failed to re-open JSONStore third time: %v", err)
 	}
@@ -137,14 +137,14 @@ func TestStoreConcurrency(t *testing.T) {
 	// 同样使用 "sqlite" 驱动名
 	db, _ := sql.Open("sqlite", ":memory:")
 	defer db.Close()
-	sqliteStore, _ := NewSQLiteStore(db)
+	sqliteStore, _ := NewSQLiteStore[string](db)
 	defer sqliteStore.Close()
 
 	tmpDir := t.TempDir()
-	jsonStore, _ := NewJSONStore(filepath.Join(tmpDir, "concurrent.json"))
+	jsonStore, _ := NewJSONStore[string](filepath.Join(tmpDir, "concurrent.json"))
 	defer jsonStore.Close()
 
-	stores := map[string]KVStore{
+	stores := map[string]KVStore[string]{
 		"SQLiteStore": sqliteStore,
 		"JSONStore":   jsonStore,
 	}
